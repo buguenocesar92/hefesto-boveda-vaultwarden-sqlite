@@ -1,0 +1,16 @@
+# Aceptación en VPS · todo pendiente
+- [ ] Imagen y versión esperadas; contenedor saludable; espacio suficiente.
+- [ ] Alta inicial privada; registro rechazado después de quitar bootstrap.
+- [ ] HTTPS válido; /admin deshabilitado; ningún puerto host público del contenedor.
+- [ ] Login en web y cliente compatible con URL propia.
+- [ ] Crear, editar y sincronizar secreto ficticio en dos clientes.
+- [ ] Adjuntar/abrir archivo de prueba; recrear contenedor conserva datos.
+- [ ] TOTP activado y recuperación probada con cuenta de ensayo.
+- [ ] Organización/colecciones: invitación autorizada y confirmación correctas.
+- [ ] Usuario sin acceso no ve colección; revocación verificada en nuevos accesos.
+- [ ] Segundo propietario de continuidad y procedimiento de salida documentados.
+- [ ] SMTP entrega correos si se habilita; no hay campañas/servicios ajenos configurados.
+- [ ] Backup completo y restauración ensayada a volumen vacío.
+- [ ] Secreto ficticio descifra y adjunto abre después de restaurar.
+- [ ] Copia externa cifrada y recuperación de su clave verificadas.
+- [ ] Versiones de clientes, límites operativos, retención y responsable aprobados.

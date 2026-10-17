@@ -1,0 +1,39 @@
+name: ${COMPOSE_PROJECT_NAME:?Ejecutar configure.py}
+services:
+  app:
+    image: vaultwarden/server:1.37.4@sha256:efb3cde962015fcc036b2ea625242248611943b27212ebf4392841fb30fad055
+    restart: unless-stopped
+    stop_grace_period: 60s
+    environment:
+      DOMAIN: https://${VAULT_HOST:?Falta dominio}
+      DATA_FOLDER: /data
+      DATABASE_URL: /data/db.sqlite3
+      ROCKET_PORT: '80'
+      SIGNUPS_ALLOWED: 'false'
+      SIGNUPS_DOMAINS_WHITELIST: ''
+      INVITATIONS_ALLOWED: 'false'
+      ORG_CREATION_USERS: ${OWNER_EMAIL:?Falta propietario}
+      ADMIN_TOKEN: ''
+      DISABLE_ADMIN_TOKEN: 'false'
+      SENDS_ALLOWED: 'false'
+      EMERGENCY_ACCESS_ALLOWED: 'false'
+      DISABLE_ICON_DOWNLOAD: 'true'
+      PUSH_ENABLED: 'false'
+      LOG_LEVEL: warn
+    volumes:
+      - data:/data
+    expose: ['80']
+    healthcheck:
+      test: [CMD, /healthcheck.sh]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+volumes:
+  data:
+    name: ${VOLUME_PREFIX:?Falta prefijo}-data

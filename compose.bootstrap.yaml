@@ -1,0 +1,7 @@
+services:
+  app:
+    ports:
+      - 127.0.0.1:8091:80
+    environment:
+      DOMAIN: http://localhost:8091
+      SIGNUPS_ALLOWED: 'true'
