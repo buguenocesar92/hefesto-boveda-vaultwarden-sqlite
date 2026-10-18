@@ -41,6 +41,11 @@ if [[ ! -d "$BASE_DIR" ]]; then
   exit 1
 fi
 
+# Convierte BASE_DIR a ruta absoluta ANTES de usarla con --project-directory.
+# Si no, un BASE_DIR relativo (p.ej. "sub") se resuelve dos veces (sub/sub)
+# y el render falla.
+BASE_DIR=$(cd "$BASE_DIR" && pwd)
+
 cd "$BASE_DIR"
 COMPOSE_PATH="$COMPOSE_FILE"
 
@@ -98,87 +103,86 @@ fi
 #    b) Los campos booleanos/de host de cada servicio se leen del JSON
 #       normalizado por `docker compose config`.
 set +e
-CHECK_OUT=$(COMPOSE_PATH="$COMPOSE_PATH" TMP_OUT="$TMP_OUT" python3 <<'PY'
+CHECK_OUT=$(BASE_DIR="$BASE_DIR" COMPOSE_PATH="$COMPOSE_PATH" TMP_OUT="$TMP_OUT" python3 <<'PY'
 import json, os, re, sys
 
 path = os.environ["COMPOSE_PATH"]
 render_path = os.environ["TMP_OUT"]
+project_root = os.environ["BASE_DIR"]
 
 errors = []
 
 # (a) name fijo en raíz y dentro de volumes/networks sobre el YAML ORIGINAL.
+#     PyYAML es obligatorio: sin él, no se puede asegurar que el chequeo
+#     de volúmenes y redes parametrizadas pasó. Abortar antes de aprobar
+#     un compose que quizás no cumple.
 try:
-    import yaml  # PyYAML está disponible en los repos del ecosistema.
+    import yaml
 except ImportError:
-    yaml = None
+    print("ERROR: falta PyYAML (python3-yaml). Instalar para correr el chequeo.")
+    sys.exit(2)
 
-def fixed_name_in_subtree(node):
-    """Devuelve (path, line) si algún sub-nodo tiene 'name' como CLAVE
-    y cuyo valor sea un string no vacío. Consideramos 'name' como campo
-    declarado cuando su clave aparece explícitamente en el mapeo.
-    """
-    hits = []
-    if isinstance(node, dict):
-        for k, v in node.items():
-            if isinstance(k, str) and k == "name":
-                if v is not None and v != "":
-                    hits.append((list(node.keys()), v))
-            if isinstance(v, (dict, list)):
-                hits.extend(fixed_name_in_subtree(v))
-    elif isinstance(node, list):
-        for item in node:
-            hits.extend(fixed_name_in_subtree(item))
-    return hits
+# Detecta una expansión de parámetro CON valor por defecto (${VAR:-...}).
+# El contrato permite esto en volúmenes para mantener ${VOLUME_PREFIX}, pero
+# nunca a nivel raíz ni en redes (Coolify asigna esos nombres).
+PARAM_RE = re.compile(r'\$\{[A-Z_][A-Z0-9_]*:-[^}]*\}')
 
-if yaml is not None:
-    with open(path) as f:
-        raw_doc = f.read()
+def is_parameterized(value):
+    if not isinstance(value, str):
+        return False
+    return bool(PARAM_RE.search(value))
 
-    class LineLoader(yaml.SafeLoader):
-        pass
+with open(path) as f:
+    raw_doc = f.read()
 
-    def _construct_mapping(loader, node):
-        loader.flatten_mapping(node)
-        pairs = loader.construct_pairs(node)
-        pairs.insert(0, ("__line__", node.start_mark.line + 1))
-        return dict(pairs)
+class LineLoader(yaml.SafeLoader):
+    pass
 
-    LineLoader.add_constructor(
-        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-        _construct_mapping,
-    )
-    try:
-        docs = list(yaml.load_all(raw_doc, Loader=LineLoader))
-    except yaml.YAMLError as exc:
-        print(f"ERROR: YAML inválido: {exc}")
-        sys.exit(2)
+def _construct_mapping(loader, node):
+    loader.flatten_mapping(node)
+    pairs = loader.construct_pairs(node)
+    pairs.insert(0, ("__line__", node.start_mark.line + 1))
+    return dict(pairs)
 
-    for doc in docs:
-        if doc is None:
+LineLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping,
+)
+try:
+    docs = list(yaml.load_all(raw_doc, Loader=LineLoader))
+except yaml.YAMLError as exc:
+    print(f"ERROR: YAML inválido: {exc}")
+    sys.exit(2)
+
+for doc in docs:
+    if doc is None:
+        continue
+    line = doc.pop("__line__", 1) if isinstance(doc, dict) else 1
+
+    # 'name' a nivel raíz: NUNCA permitido (ni siquiera con interpolación).
+    if isinstance(doc, dict) and "name" in doc and doc["name"]:
+        errors.append(f"'name:' fijo a nivel raíz (línea {line})")
+
+    # 'name' en entries de volumes/networks.
+    # - networks: nunca se permite 'name:' (Coolify asigna el nombre).
+    # - volumes: solo se permite si es ${VAR:-default}; cualquier otro valor
+    #   cuenta como nombre fijo y se rechaza.
+    for sect in ("volumes", "networks"):
+        sub = doc.get(sect) if isinstance(doc, dict) else None
+        if not isinstance(sub, dict):
             continue
-        line = doc.pop("__line__", 1) if isinstance(doc, dict) else 1
-
-        # 'name' a nivel raíz
-        if isinstance(doc, dict) and "name" in doc and doc["name"]:
-            errors.append(f"'name:' fijo a nivel raíz (línea {line})")
-
-        # 'name' en entries de volumes/networks
-        for sect in ("volumes", "networks"):
-            sub = doc.get(sect) if isinstance(doc, dict) else None
-            if not isinstance(sub, dict):
+        for entry_name, body in sub.items():
+            if not isinstance(body, dict) or "name" not in body:
                 continue
-            for entry_name, body in sub.items():
-                if isinstance(body, dict) and "name" in body and body["name"]:
-                    entry_line = body.pop("__line__", 0) if isinstance(body, dict) else 0
-                    errors.append(
-                        f"{sect}.{entry_name}: 'name:' fijo (línea {entry_line})"
-                    )
-else:
-    # Fallback sin PyYAML — chequeo regex básico.
-    for i, line in enumerate(open(path)):
-        if re.match(r"^name:\s*\S", line):
-            errors.append(f"'name:' fijo a nivel raíz (línea {i+1})")
-            break
+            body_name = body["name"]
+            if not body_name:
+                continue
+            if sect == "volumes" and is_parameterized(body_name):
+                continue
+            entry_line = body.pop("__line__", 0) if isinstance(body, dict) else 0
+            errors.append(
+                f"{sect}.{entry_name}: 'name:' fijo (línea {entry_line})"
+            )
 
 # (b) Campos de poder sobre el host y Traefik, sobre el render JSON.
 with open(render_path) as f:
@@ -205,6 +209,8 @@ def coerce_str(v):
     if isinstance(v, bool):
         return ""
     return str(v).strip().strip("'\"").lower()
+
+project_root_real = os.path.realpath(project_root)
 
 for svc_name, svc in services.items():
     if has_profile(svc):
@@ -234,6 +240,24 @@ for svc_name, svc in services.items():
     raw = json.dumps(svc)
     if "docker.sock" in raw or "/var/run/docker.sock" in raw:
         errors.append(f"{label}: monta docker.sock")
+
+    # Bind mounts: la 'source' debe estar bajo el directorio del proyecto.
+    # Cualquier bind fuera del repo (incluido docker.sock que ya se cubre arriba)
+    # se rechaza: el contrato prohíbe exponer archivos del host al contenedor.
+    for vol in (svc.get("volumes") or []):
+        if not isinstance(vol, dict):
+            continue
+        if vol.get("type") != "bind":
+            continue
+        source = vol.get("source") or ""
+        if not source:
+            continue
+        real_source = os.path.realpath(source)
+        if real_source == project_root_real:
+            continue
+        if real_source.startswith(project_root_real + os.sep):
+            continue
+        errors.append(f"{label}: bind fuera del repo ({source})")
 
 if errors:
     print("FAIL")
