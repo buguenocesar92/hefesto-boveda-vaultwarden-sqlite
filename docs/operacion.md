@@ -11,7 +11,7 @@ Cifrar antes de copiar fuera del VPS mediante la herramienta corporativa (por ej
 
 ## Recuperar en proyecto vacío
 1. Recuperar kit y respaldo confiable, descifrarlo en un directorio privado. Los hashes detectan corrupción, no certifican la identidad del archivo.
-2. Copiar .env y compose.yaml del respaldo al directorio destino; cambiar COMPOSE_PROJECT_NAME y VOLUME_PREFIX a nombres NUEVOS, ajustar VAULT_HOST/OWNER_EMAIL si corresponde. Conservar imagen de la misma versión. `chmod 600 .env`.
+2. Copiar .env y compose.yaml del respaldo al directorio destino; cambiar COMPOSE_PROJECT_NAME y VOLUME_PREFIX a nombres NUEVOS, ajustar VAULT_HOST/OWNER_EMAIL si corresponde. Conservar imagen de la misma versión. `chmod 600 .env`. `VOLUME_PREFIX` define el nombre del volumen `data` (`${VOLUME_PREFIX:-hefesto-boveda}-data`); cambiarlo crea un volumen nuevo y debe coordinarse con `scripts/backup.py` y `scripts/restore.py`, que apuntan al nombre efectivo.
 3. Ejecutar `docker compose pull`. NO arrancar app: crearía una base nueva.
 4. Ejecutar `python3 scripts/restore.py /ruta/backup`. Valida hashes, rutas/tipos, SQLite y exige volumen vacío; no borra datos existentes. Rechaza enlaces del tar. Ante fallo parcial, usar otro volumen nuevo. No mezclar un db.sqlite3 con WAL de otro respaldo.
 5. Revisar config.json heredado si existe; podría tener dominio y políticas distintas. Usar entorno aislado de prueba, sin SMTP ni acceso público hasta verificarlo. No imprimirlo en soporte.

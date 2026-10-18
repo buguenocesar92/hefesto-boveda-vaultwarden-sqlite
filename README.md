@@ -26,34 +26,52 @@ Estado: archivos revisados estáticamente y validador de archivos ensayado con S
 
 ## Despliegue en Coolify (MVP Hefesto)
 
-El compose principal (`compose.yaml`) ya cumple el contrato de Coolify: el servicio `app` no publica puertos propios (Traefik enruta el dominio), no usa `container_name`, ni poderes sobre el host, y Coolify asigna el nombre del proyecto y del volumen.
+El compose principal (`compose.yaml`) ya cumple el contrato de Coolify: el servicio `app` no publica puertos propios (Traefik enruta el dominio), no usa `container_name`, ni poderes sobre el host, y Coolify asigna el nombre del proyecto.
 
 Para desplegar desde Coolify:
 
-1. Crea la aplicación con build pack **Docker Compose** apuntando a `compose.yaml`.
-2. Configura el dominio en Coolify (Traefik se encarga del TLS).
-3. Define estas variables en la UI de Coolify:
+1. Crea la aplicación en Coolify con build pack **Docker Compose** apuntando a `compose.yaml`. **No asignes el dominio público todavía**: la cuenta del propietario se crea antes de publicar la URL, para no exponer el formulario de registro mientras está abierto.
+
+2. Define las variables mínimas en la UI de Coolify. Las claves con valor vacío (`SMTP_HOST`, `SMTP_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD`) se omiten al renderizar y no llegan al contenedor; defínelas solo cuando vayas a configurar correo.
 
    | Variable | Obligatoria | Default | Descripción |
    |---|---|---|---|
-   | `VAULT_HOST` | sí | — | Dominio público (ej. `boveda.tudominio.cl`). Se usa como `DOMAIN: https://${VAULT_HOST}`. |
+   | `VAULT_HOST` | sí | — | Dominio público final (ej. `boveda.tudominio.cl`). Se usa como `DOMAIN: https://${VAULT_HOST}`. |
    | `OWNER_EMAIL` | sí | — | Correo del propietario. Único usuario que podrá crear organizaciones. |
    | `SIGNUPS_ALLOWED` | no | `false` | `true` solo durante el alta inicial privada; vuelve a `false` cuando crees la cuenta del propietario. |
    | `INVITATIONS_ALLOWED` | no | `false` | `true` únicamente si vas a configurar SMTP y permitir invitaciones de organización. |
-   | `SMTP_HOST` | no | vacío | Si se deja vacío, no se envía correo y las invitaciones quedan inactivas aunque `INVITATIONS_ALLOWED=true`. |
+   | `SMTP_HOST` | no | (no se pasa) | Host SMTP. Si se deja vacío, no se envía correo y las invitaciones quedan inactivas aunque `INVITATIONS_ALLOWED=true`. |
    | `SMTP_PORT` | no | `587` | |
    | `SMTP_SECURITY` | no | `starttls` | |
-   | `SMTP_FROM` | no | vacío | Remitente (ej. `boveda@tudominio.cl`). |
+   | `SMTP_FROM` | no | (no se pasa) | Remitente (ej. `boveda@tudominio.cl`). |
    | `SMTP_FROM_NAME` | no | `Hefesto Boveda` | |
-   | `SMTP_USERNAME` | no | vacío | |
-   | `SMTP_PASSWORD` | no | vacío | |
+   | `SMTP_USERNAME` | no | (no se pasa) | |
+   | `SMTP_PASSWORD` | no | (no se pasa) | |
    | `SMTP_ACCEPT_INVALID_CERTS` | no | `false` | |
    | `SMTP_ACCEPT_INVALID_HOSTNAMES` | no | `false` | |
    | `SMTP_DEBUG` | no | `false` | |
 
-4. **Alta privada inicial.** Antes de exponer el dominio público, pon `SIGNUPS_ALLOWED=true` en la UI, espera a que Vaultwarden reinicie, crea la cuenta con el correo `OWNER_EMAIL` y una contraseña maestra elegida por su titular, y vuelve a poner `SIGNUPS_ALLOWED=false`. El puerto del bootstrap (`compose.bootstrap.yaml`, `127.0.0.1:8091:80`) sirve solo para usar `python3 scripts/configure.py` + `docker compose` directos sobre el loopback del servidor; con Coolify no se usa ese override.
+3. **Alta privada inicial antes del dominio público.** Con `SIGNUPS_ALLOWED=true` ya definido, crea la cuenta por el camino del bootstrap (loopback del servidor), sin pasar por la URL pública:
 
-`scripts/configure.py` sigue siendo válido para `docker compose` directo (genera `VAULT_HOST` y `OWNER_EMAIL` en `.env`). Las variables `COMPOSE_PROJECT_NAME` y `VOLUME_PREFIX` que ese script dejaba en `.env` ya no las usa el compose; Coolify asigna esos nombres por sí mismo.
+   ```sh
+   ssh usuario@servidor
+   cd /ruta/al/repo
+   docker compose -f compose.yaml -f compose.bootstrap.yaml up -d
+   ```
+
+   Desde tu computador, abre el puerto por SSH y entra al formulario:
+
+   ```sh
+   ssh -L 8091:127.0.0.1:8091 usuario@servidor
+   ```
+
+   Abre http://localhost:8091 (contexto seguro del navegador), registra la cuenta con el correo `OWNER_EMAIL` y una contraseña maestra elegida por su titular. Cuando termines, baja el stack de bootstrap (`docker compose down`) para liberar el puerto.
+
+4. Vuelve a poner `SIGNUPS_ALLOWED=false` en la UI de Coolify y redespliega. Confirma en los logs que la variable quedó en `false` antes de seguir.
+
+5. Asigna el dominio público en Coolify (Traefik se encarga del TLS). Solo después de este paso la bóveda queda accesible desde Internet.
+
+`scripts/configure.py` sigue siendo válido para `docker compose` directo (genera `VAULT_HOST`, `OWNER_EMAIL`, `COMPOSE_PROJECT_NAME` y `VOLUME_PREFIX` en `.env`). El compose ya no fuerza `COMPOSE_PROJECT_NAME`: `docker compose` la sigue leyendo del `.env` si está definida, y Coolify asigna el nombre del proyecto por sí mismo. `VOLUME_PREFIX` se usa para nombrar el volumen `data` con un valor por defecto (`hefesto-boveda-data`); cambiarla crea un volumen nuevo y debe coordinarse con `scripts/backup.py` y `scripts/restore.py`, que apuntan a ese nombre.
 
 Comprueba que tu compose sigue cumpliendo el contrato Coolify después de cualquier cambio:
 
@@ -61,4 +79,4 @@ Comprueba que tu compose sigue cumpliendo el contrato Coolify después de cualqu
 bash scripts/coolify-check.sh
 ```
 
-El script genera un `.env` con valores ficticios no secretos, renderiza el compose con `docker compose config` y verifica que no queden `name:` fijos a nivel raíz ni en volúmenes, ni campos que den poder sobre el host en servicios sin profiles.
+El script genera un `.env` con valores ficticios no secretos, renderiza el compose con `docker compose config` y verifica que no queden `name:` fijos a nivel raíz ni en redes, que los volúmenes parametrizados con `${VOLUME_PREFIX:-...}` lleven valor por defecto, que ningún bind exponga rutas fuera del repo y que no haya campos que den poder sobre el host en servicios sin profiles.
